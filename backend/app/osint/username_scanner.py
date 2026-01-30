@@ -1,92 +1,136 @@
 import requests
+from typing import Dict, List
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (OSINT Research Tool)"
 }
 
-PLATFORMS = {
-    "github": {
-        "url": "https://github.com/{username}",
-        "exists_if": ["data-octo-click"],      # profile-specific marker
-        "not_found_if": ["Not Found"],
-    },
-    "twitter": {
-        "url": "https://twitter.com/{username}",
-        "exists_if": ["profile"],               # profile container
-        "not_found_if": ["This account doesn’t exist"],
-    },
-    "instagram": {
-        "url": "https://www.instagram.com/{username}/",
-        "exists_if": ["profilePage"],
-        "not_found_if": ["Sorry, this page isn't available"],
-    },
-}
+TIMEOUT = 10
 
-def scan_username(username: str):
+
+def scan_username(username: str) -> List[Dict]:
     results = []
 
-    for platform, cfg in PLATFORMS.items():
-        url = cfg["url"].format(username=username)
-
-        try:
-            resp = requests.get(url, headers=HEADERS, timeout=10)
-
-            # 🚫 Blocked / rate-limited
-            if resp.status_code in (401, 403, 429):
-                results.append({
-                    "platform": platform,
-                    "exists": False,
-                    "status": "blocked",
-                    "url": url,
-                })
-                continue
-
-            # ❌ Hard not found
-            if resp.status_code == 404:
-                results.append({
-                    "platform": platform,
-                    "exists": False,
-                    "status": "not_found",
-                    "url": url,
-                })
-                continue
-
-            html = resp.text
-
-            # ❌ Soft not found (200 but error page)
-            if any(x in html for x in cfg["not_found_if"]):
-                results.append({
-                    "platform": platform,
-                    "exists": False,
-                    "status": "not_found",
-                    "url": url,
-                })
-                continue
-
-            # ✅ Confirmed existence
-            if any(x in html for x in cfg["exists_if"]):
-                results.append({
-                    "platform": platform,
-                    "exists": True,
-                    "status": "confirmed",
-                    "url": url,
-                })
-                continue
-
-            # 🤷 Unknown page structure
-            results.append({
-                "platform": platform,
-                "exists": False,
-                "status": "error",
-                "url": url,
-            })
-
-        except Exception:
-            results.append({
-                "platform": platform,
-                "exists": False,
-                "status": "error",
-                "url": url,
-            })
+    results.append(check_github(username))
+    results.append(check_twitter(username))
+    results.append(check_instagram(username))
 
     return results
+
+
+# ---------------- GITHUB ----------------
+def check_github(username: str) -> Dict:
+    url = f"https://github.com/{username}"
+
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+
+        if r.status_code == 404:
+            return {
+                "platform": "github",
+                "status": "not_found",
+                "exists": False,
+                "url": None,
+            }
+
+        if r.status_code == 200 and f'"login":"{username}"' in r.text:
+            return {
+                "platform": "github",
+                "status": "confirmed",
+                "exists": True,
+                "url": url,
+            }
+
+        return {
+            "platform": "github",
+            "status": "error",
+            "exists": False,
+            "url": None,
+        }
+
+    except requests.RequestException:
+        return {
+            "platform": "github",
+            "status": "error",
+            "exists": False,
+            "url": None,
+        }
+
+
+# ---------------- TWITTER / X ----------------
+def check_twitter(username: str) -> Dict:
+    url = f"https://twitter.com/{username}"
+
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        text = r.text.lower()
+
+        if "this account doesn’t exist" in text or "account suspended" in text:
+            return {
+                "platform": "twitter",
+                "status": "not_found",
+                "exists": False,
+                "url": None,
+            }
+
+        if f"@{username.lower()}" in text:
+            return {
+                "platform": "twitter",
+                "status": "confirmed",
+                "exists": True,
+                "url": url,
+            }
+
+        return {
+            "platform": "twitter",
+            "status": "blocked",
+            "exists": False,
+            "url": None,
+        }
+
+    except requests.RequestException:
+        return {
+            "platform": "twitter",
+            "status": "error",
+            "exists": False,
+            "url": None,
+        }
+
+
+# ---------------- INSTAGRAM ----------------
+def check_instagram(username: str) -> Dict:
+    url = f"https://www.instagram.com/{username}/"
+
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+
+        if r.status_code == 404:
+            return {
+                "platform": "instagram",
+                "status": "not_found",
+                "exists": False,
+                "url": None,
+            }
+
+        if f'"username":"{username}"' in r.text:
+            return {
+                "platform": "instagram",
+                "status": "confirmed",
+                "exists": True,
+                "url": url,
+            }
+
+        return {
+            "platform": "instagram",
+            "status": "blocked",
+            "exists": False,
+            "url": None,
+        }
+
+    except requests.RequestException:
+        return {
+            "platform": "instagram",
+            "status": "error",
+            "exists": False,
+            "url": None,
+        }

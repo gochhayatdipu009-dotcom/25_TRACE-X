@@ -11,7 +11,6 @@ from app.osint.delta_engine import run_delta_analysis
 from app.osint.learning_rules import update_confidence
 from app.osint.risk_engine import calculate_platform_risk
 from app.osint.reverse_osint_engine import detect_reverse_osint_signals
-from typing import cast
 
 from app.models.scan_session import ScanSession
 from app.models.platform_exposure import PlatformExposure
@@ -21,7 +20,6 @@ from app.models.risk_score import RiskScore
 router = APIRouter()
 
 
-# ---------- DB Dependency ----------
 def get_db():
     db = SessionLocal()
     try:
@@ -30,18 +28,15 @@ def get_db():
         db.close()
 
 
-# ---------- Request Schema ----------
 class ScanRequest(BaseModel):
     username: str
 
 
-# ---------- Scan Endpoint ----------
 @router.post("/scan")
 def start_scan(payload: ScanRequest, db: Session = Depends(get_db)):
     username = payload.username.strip()
     logger.info(f"[SCAN] Started scan for username: {username}")
 
-    # 1️⃣ Create scan session
     scan_session = ScanSession(
         input_username=username,
         started_at=datetime.utcnow(),
@@ -51,35 +46,36 @@ def start_scan(payload: ScanRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(scan_session)
 
-    scan_id = cast(int, scan_session.id)
+    scan_id: int = int(scan_session.id)
 
     scan_results = scan_username(username)
-    platforms_response: list[dict] = []
+    platforms_response = []
 
-    # 2️⃣ Process each platform independently
     for result in scan_results:
         platform = result["platform"]
-        exists = result["status"] == "confirmed"
+        status = result["status"]
+
+        # 🔒 ONLY confirmed = exists
+        exists = status == "confirmed"
 
         platform_exposure = PlatformExposure(
-    scan_session_id=scan_id,
-    platform=platform,
-    platform_username=username,
-    exists=exists,
-    status=result["status"],   
-    first_seen_at=datetime.utcnow(),
-    last_seen_at=datetime.utcnow(),
-)
-
+            scan_session_id=scan_id,
+            platform=platform,
+            platform_username=username,
+            exists=exists,
+            status=status,
+            first_seen_at=datetime.utcnow(),
+            last_seen_at=datetime.utcnow(),
+        )
         db.add(platform_exposure)
         db.commit()
         db.refresh(platform_exposure)
 
-        platform_exposure_id = cast(int, platform_exposure.id)
-        evidence_payload: list[dict] = []
+        platform_exposure_id: int = int(platform_exposure.id)
+        evidence_payload = []
 
-        # 3️⃣ Evidence
-        if exists:
+        # 🔒 Evidence ONLY if confirmed
+        if exists and result.get("url"):
             evidence = ExposureEvidence(
                 platform_exposure_id=platform_exposure_id,
                 evidence_type="profile",
@@ -89,35 +85,31 @@ def start_scan(payload: ScanRequest, db: Session = Depends(get_db)):
             db.add(evidence)
             db.commit()
 
-            evidence_payload.append(
-                {
-                    "evidence_type": "profile",
-                    "evidence_value": result["url"],
-                }
-            )
+            evidence_payload.append({
+                "evidence_type": "profile",
+                "evidence_value": result["url"],
+            })
 
-        # 4️⃣ Delta analysis
+        # Delta analysis (future-proof)
         run_delta_analysis(
             db=db,
             platform_exposure=platform_exposure,
             current_evidence=evidence_payload,
         )
 
-        # 5️⃣ Confidence learning
-        #update_confidence(db, platform_exposure_id)
+        update_confidence(db, platform_exposure_id)
 
-        # 6️⃣ Risk scoring
+        # Risk scoring (will be zero if not confirmed)
         calculate_platform_risk(
             db=db,
             platform_exposure_id=platform_exposure_id,
             platform=platform,
         )
 
-        # 7️⃣ Reverse OSINT detection
         reverse_flags = detect_reverse_osint_signals(
             db=db,
             platform_exposure_id=platform_exposure_id,
-        ) or []
+        )
 
         latest_risk = (
             db.query(RiskScore)
@@ -129,18 +121,17 @@ def start_scan(payload: ScanRequest, db: Session = Depends(get_db)):
             .first()
         )
 
-        platforms_response.append(
-            {
-                "platform": platform,
-                "exists": exists,
-                "evidence_count": len(evidence_payload),
-                "risk_score": latest_risk.risk_score if latest_risk else None,
-                "risk_level": latest_risk.risk_level if latest_risk else "unknown",
-                "reverse_osint_flags": reverse_flags,
-            }
-        )
+        platforms_response.append({
+            "platform": platform,
+            "exists": exists,
+            "status": status,
+            "url": result.get("url"),
+            "evidence_count": len(evidence_payload),
+            "risk_score": latest_risk.risk_score if latest_risk else 0,
+            "risk_level": latest_risk.risk_level if latest_risk else "Low",
+            "reverse_osint_flags": reverse_flags,
+        })
 
-    # 8️⃣ Finalize scan session
     setattr(scan_session, "completed_at", datetime.utcnow())
     db.commit()
 

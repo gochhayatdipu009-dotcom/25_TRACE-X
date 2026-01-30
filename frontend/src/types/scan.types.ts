@@ -7,7 +7,7 @@ export interface PlatformResult {
   url?: string | null;
   evidence_count: number;
   risk_score?: number;
-  risk_level?: RiskLevel;   // 🔥 FIXED
+  risk_level?: RiskLevel;   
   reverse_osint_flags?: any[];
 }
 
