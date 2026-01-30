@@ -1,38 +1,43 @@
-# backend/app/osint/delta_engine.py
-
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from app.models.platform_exposure import PlatformExposure
-from app.models.exposure_evidence import ExposureEvidence
 from app.models.delta_event import DeltaEvent
-from app.utils.logger import logger
+from app.models.exposure_evidence import ExposureEvidence
 
 
 def run_delta_analysis(
     db: Session,
-    platform_exposure: PlatformExposure,
+    platform_exposure,
     current_evidence: list[dict],
 ):
-    """
-    DEV MODE:
-    Always emit a delta event so timeline is visible.
-    This proves the pipeline works.
-    """
+    
+    previous = (
+        db.query(ExposureEvidence)
+        .filter(
+            ExposureEvidence.platform_exposure_id == platform_exposure.id
+        )
+        .order_by(ExposureEvidence.discovered_at.desc())
+        .first()
+    )
 
-    # 🔴 FORCE a delta event on every scan (DEV ONLY)
+    
+    if not previous:
+        return
+
+    previous_value = previous.evidence_value
+    current_value = current_evidence[0]["evidence_value"] if current_evidence else None
+
+    
+    if previous_value == current_value:
+        return
+
     delta = DeltaEvent(
         platform_exposure_id=platform_exposure.id,
-        delta_type="new",
-        previous_value=None,
-        current_value="forced_dev_delta",
+        delta_type="changed",
+        previous_value=previous_value,
+        current_value=current_value,
         detected_at=datetime.utcnow(),
     )
 
     db.add(delta)
     db.commit()
-
-    logger.info(
-        f"[DELTA][DEV] Forced delta event for platform "
-        f"{platform_exposure.platform}"
-    )

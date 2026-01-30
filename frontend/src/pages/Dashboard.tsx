@@ -7,7 +7,10 @@ import RiskRing from "../components/charts/RiskRing";
 import ReverseAlerts from "../components/alerts/ReverseAlerts";
 import Timeline from "../components/timeline/Timeline";
 
-/* 🔹 Platform status badge */
+
+const ALLOWED_PLATFORMS = ["github", "instagram"] as const;
+
+
 function statusBadge(status: PlatformResult["status"]) {
   switch (status) {
     case "confirmed":
@@ -37,7 +40,16 @@ export default function Dashboard() {
 
     try {
       const data = await runScan(username.trim());
-      setScan(data);
+
+      
+      const filteredPlatforms = data.platforms.filter((p) =>
+        ALLOWED_PLATFORMS.includes(p.platform as any)
+      );
+
+      setScan({
+        ...data,
+        platforms: filteredPlatforms,
+      });
 
       try {
         const events = await fetchTimeline(data.scan_id);
@@ -150,7 +162,7 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Reverse OSINT alerts */}
+      {/* Reverse OSINT alerts (filtered platforms only) */}
       {scan && <ReverseAlerts platforms={scan.platforms} />}
 
       {/* Exposure timeline */}

@@ -37,7 +37,6 @@ def start_scan(payload: ScanRequest, db: Session = Depends(get_db)):
     username = payload.username.strip()
     logger.info(f"[SCAN] Started scan for username: {username}")
 
-    # 1️⃣ Scan session
     scan_session = ScanSession(
         input_username=username,
         started_at=datetime.utcnow(),
@@ -47,17 +46,16 @@ def start_scan(payload: ScanRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(scan_session)
 
-    scan_id = int(scan_session.id)
+    scan_id = scan_session.id  # ✅ keep as ORM value
 
-    scan_results = scan_username(username)
+    results = scan_username(username)
     platforms_response: list[dict] = []
 
-    for result in scan_results:
+    for result in results:
         platform = result["platform"]
         status = result["status"]
         exists = status == "confirmed"
 
-        # 2️⃣ Platform exposure
         platform_exposure = PlatformExposure(
             scan_session_id=scan_id,
             platform=platform,
@@ -67,15 +65,15 @@ def start_scan(payload: ScanRequest, db: Session = Depends(get_db)):
             first_seen_at=datetime.utcnow(),
             last_seen_at=datetime.utcnow(),
         )
+
         db.add(platform_exposure)
         db.commit()
         db.refresh(platform_exposure)
 
-        platform_exposure_id = int(platform_exposure.id)  # ✅ CAST ONCE
+        platform_exposure_id = platform_exposure.id  # ✅ DO NOT CAST
 
         evidence_payload: list[dict] = []
 
-        # 3️⃣ Evidence only if confirmed
         if exists and result.get("url"):
             evidence = ExposureEvidence(
                 platform_exposure_id=platform_exposure_id,
@@ -86,24 +84,19 @@ def start_scan(payload: ScanRequest, db: Session = Depends(get_db)):
             db.add(evidence)
             db.commit()
 
-            evidence_payload.append(
-                {
-                    "evidence_type": "profile",
-                    "evidence_value": result["url"],
-                }
-            )
+            evidence_payload.append({
+                "evidence_type": "profile",
+                "evidence_value": result["url"],
+            })
 
-        # 4️⃣ Delta analysis
         run_delta_analysis(
             db=db,
             platform_exposure=platform_exposure,
             current_evidence=evidence_payload,
         )
 
-        # 5️⃣ Confidence learning
         update_confidence(db, platform_exposure_id)
 
-        # 6️⃣ Risk scoring (only if exists)
         if exists:
             calculate_platform_risk(
                 db=db,
@@ -111,7 +104,6 @@ def start_scan(payload: ScanRequest, db: Session = Depends(get_db)):
                 platform=platform,
             )
 
-        # 7️⃣ Reverse OSINT
         reverse_flags = detect_reverse_osint_signals(
             db=db,
             platform_exposure_id=platform_exposure_id,
@@ -127,21 +119,18 @@ def start_scan(payload: ScanRequest, db: Session = Depends(get_db)):
             .first()
         )
 
-        platforms_response.append(
-            {
-                "platform": platform,
-                "exists": exists,
-                "status": status,
-                "url": result.get("url"),
-                "evidence_count": len(evidence_payload),
-                "risk_score": latest_risk.risk_score if latest_risk else 0,
-                "risk_level": latest_risk.risk_level if latest_risk else "Low",
-                "reverse_osint_flags": reverse_flags,
-            }
-        )
+        platforms_response.append({
+            "platform": platform,
+            "exists": exists,
+            "status": status,
+            "url": result.get("url"),
+            "evidence_count": len(evidence_payload),
+            "risk_score": latest_risk.risk_score if latest_risk else 0,
+            "risk_level": latest_risk.risk_level if latest_risk else "Low",
+            "reverse_osint_flags": reverse_flags,
+        })
 
-    # 8️⃣ Complete scan (Pylance-safe)
-    setattr(scan_session, "completed_at", datetime.utcnow())
+    scan_session.completed_at = datetime.utcnow()
     db.commit()
 
     logger.info(f"[SCAN] Completed scan session {scan_id}")
